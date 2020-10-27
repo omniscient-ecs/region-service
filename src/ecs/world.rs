@@ -1,5 +1,6 @@
 
-use std::sync::Mutex;
+use tokio::sync::mpsc::error::SendError;
+use std::{sync::Mutex, fmt};
 use tokio::{runtime::Builder, sync::mpsc::{self, UnboundedReceiver, UnboundedSender}};
 use tokio::runtime::Runtime;
 use tokio::{sync::oneshot::{self, Sender}};
@@ -17,6 +18,16 @@ use rapier3d::pipeline::PhysicsPipeline;
 use std::thread::sleep;
 
 struct Tick(u64);
+
+struct IntentError;
+
+// Implement std::fmt::Display for AppError
+impl fmt::Debug for IntentError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Could not register intent")
+    }
+}
+
 
 struct MovementSystemConfig {
     always_send_update_on_tick: bool,
@@ -82,30 +93,6 @@ struct RigidBody {
     
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Position {
-    position_x: f32,
-    position_y: f32,
-    position_z: f32,
-    rotation_x: f32,
-    rotation_y: f32,
-    rotation_z: f32,
-}
-
-
-impl Position {
-    pub fn default() -> Self {
-        Self {
-            position_x: 0f32,
-            position_y: 0f32,
-            position_z: 0f32,
-            rotation_x: 0f32,
-            rotation_y: 0f32,
-            rotation_z: 0f32,
-        }
-    }
-}
-
 struct Velocity {
     linear_x: f32,
     linear_y: f32,
@@ -152,10 +139,9 @@ impl WorldContext {
         }
     }
 
-    // Note - you cannot call this function until entity has been set! (May need to add thread safety and checking...)
-    pub async fn submit_intent<T: Any + Sized + Send + Sync + Copy>(&self, component: T) {
+    pub async fn submit_intent<T: Any + Sized + Send + Sync>(&self, component: T) -> Result<(), IntentError> {
         let region = self.region.read().await;
-        region.upsert_component(self.entity_id, component);
+        region.upsert_component(self.entity_id, component)
     }
 }
 
@@ -231,18 +217,18 @@ trait EntityUpdate : Send + Sync {
     fn process_update(self: Box<Self>, cmd: &mut CommandBuffer);
 }
 
-struct UpdateComponent<T> where T : Any + Sized + Send + Sync + Copy   {
+struct UpdateComponent<T> where T : Any + Sized + Send + Sync   {
     entity_id: Entity,
     component: T,
 }
 
-impl<T: Component + Copy> EntityUpdate for UpdateComponent<T> {
+impl<T: Component> EntityUpdate for UpdateComponent<T> {
     fn process_update(self: Box<Self>, cmd: &mut CommandBuffer) {
         cmd.add_component(self.entity_id, self.component);
     }
 }
 
-impl<T: Any + Sized + Send + Sync + Copy> UpdateComponent<T> {
+impl<T: Any + Sized + Send + Sync> UpdateComponent<T> {
     fn new(entity_id: Entity, component: T) -> Self {
         Self {
             entity_id: entity_id,
@@ -332,8 +318,11 @@ impl RegionInstance {
         }
     }
 
-    pub async fn upsert_component<T: Any + Sized + Send + Sync + Copy>(&self, entity_id: Entity, component: T) {
-        self.events_sender.send(Box::new(UpdateComponent::new(entity_id, component)));
+    pub fn upsert_component<T: Any + Sized + Send + Sync>(&self, entity_id: Entity, component: T) -> Result<(), IntentError> {
+        match self.events_sender.send(Box::new(UpdateComponent::new(entity_id, component))) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(IntentError)
+        }
     }
 
     fn run(&self, ecs_schedule: Rc<RefCell<Schedule>>) {
@@ -395,8 +384,11 @@ extern crate test;
 
 #[cfg(test)]
 mod tests {
+    use crate::protos::components::Position;
+
     use super::*;
     use test::Bencher;
+    use tokio_test::assert_ok;
 
     #[test]
     fn new_world_test() {
@@ -420,13 +412,14 @@ mod tests {
         world.run_simulation(1); // Run only 1 ticks... otherwise the program runs forever
         let observer = NetworkedObserver::new(String::from(connection_id));
         let context = world.create_context(0, 0, observer).await;
+        let result = context.submit_intent(Position::default()).await;
         println!("created world context connection_id: {}, entity_id: {:?}", context.connection_id, context.entity_id);
 
         assert_eq!(connection_id, context.connection_id);
+        assert_ok!(result);
     }
     
     #[bench]
     fn run_world_test(b: &mut Bencher) {
-       
     }
 }

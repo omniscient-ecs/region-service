@@ -13,3 +13,7 @@ rapier3d = "0.2.1"
 tokio = { version = "0.3", features = ["full"] }
 tokio-test = "0.3"
 priomutex = "0.3.1"
+protobuf = "2.18"
+
+[build-dependencies]
+protoc-rust = "2.0"
