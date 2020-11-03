@@ -14,6 +14,8 @@ tokio = { version = "0.3", features = ["full"] }
 tokio-test = "0.3"
 priomutex = "0.3.1"
 protobuf = "2.18"
+dyn-clone = "1.0.3"
+rayon = "1.5"
 
 [build-dependencies]
 protoc-rust = "2.0"

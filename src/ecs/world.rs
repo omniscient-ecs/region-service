@@ -1,373 +1,188 @@
-
-use tokio::sync::mpsc::error::SendError;
-use std::{sync::Mutex, fmt};
-use tokio::{runtime::Builder, sync::mpsc::{self, UnboundedReceiver, UnboundedSender}};
-use tokio::runtime::Runtime;
-use tokio::{sync::oneshot::{self, Sender}};
-use std::pin::Pin;
-use tokio::sync::{Notify, RwLock};
-use legion::{Entity, Resources, Schedule, World, storage::Component, storage::IntoComponentSource, system, systems::CommandBuffer};
-use tokio::{task};
-use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration, time::SystemTime};
-use std::cell::RefCell;
-use std::any::Any;
-use rapier3d::{dynamics::BodyStatus, dynamics::RigidBodyBuilder, na::Isometry3, na::Vector3, pipeline::EventHandler};
-use rapier3d::dynamics::{JointSet, RigidBodySet, IntegrationParameters};
-use rapier3d::geometry::{BroadPhase, NarrowPhase, ColliderSet};
+use crate::ecs::region::Intent;
+use crate::ecs::region::RegionInstance;
+use legion::{
+    storage::IntoComponentSource, system, systems::CommandBuffer, Entity, Resources, Schedule,
+    World,
+};
+use rapier3d::dynamics::{IntegrationParameters, JointSet, RigidBodySet};
+use rapier3d::geometry::{BroadPhase, ColliderSet, NarrowPhase};
 use rapier3d::pipeline::PhysicsPipeline;
+use rapier3d::{
+    dynamics::BodyStatus, dynamics::RigidBodyBuilder, na::Isometry3, na::Vector3,
+    pipeline::EventHandler,
+};
+use rayon::prelude::*;
+use std::any::Any;
+use std::cell::RefCell;
+use std::fmt;
+use std::pin::Pin;
 use std::thread::sleep;
+use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration, time::SystemTime};
+use tokio::runtime::Runtime;
+use tokio::sync::oneshot::{self, Sender};
+use tokio::sync::{broadcast, mpsc::error::SendError};
+use tokio::sync::{broadcast::error::TryRecvError, Mutex};
+use tokio::sync::{Notify, RwLock};
+use tokio::task;
+use tokio::{
+    runtime::Builder,
+    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+};
+use rayon::prelude::*;
 
-struct Tick(u64);
+use super::region::{EntityUpdate, IntentError, UpdateComponent};
 
-struct IntentError;
-
-// Implement std::fmt::Display for AppError
-impl fmt::Debug for IntentError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Could not register intent")
-    }
-}
-
-
-struct MovementSystemConfig {
-    always_send_update_on_tick: bool,
-}
-
-struct PhysicsState {
-    config: MovementSystemConfig,
-    pipeline: PhysicsPipeline,
-    gravity: Vector3<f32>,
-    integration_parameters: IntegrationParameters,
-    broad_phase: BroadPhase,
-    narrow_phase: NarrowPhase,
-    bodies: RigidBodySet,
-    colliders: ColliderSet,
-    joints: JointSet,
-}
-
-impl PhysicsState {
-    pub fn new(tick_rate_hz: u8) -> Self {
-        let mut integration_parameters = IntegrationParameters::default();
-        integration_parameters.set_dt(1f32 / tick_rate_hz as f32);
-
-        Self {
-            config: MovementSystemConfig {
-                always_send_update_on_tick: true,
-            },
-            pipeline: PhysicsPipeline::new(),
-            gravity: Vector3::new(0.0, -9.81, 0.0),
-            integration_parameters: integration_parameters,
-            broad_phase: BroadPhase::new(),
-            narrow_phase: NarrowPhase::new(),
-            bodies: RigidBodySet::new(),
-            colliders: ColliderSet::new(),
-            joints: JointSet::new(),
-        }
-    }
-}
-
-
-#[system]
-fn region(#[state] region: &mut RegionInstance, cmd: &mut CommandBuffer) {
-    region.process_updates(cmd);
-}
-
-#[system]
-fn movement(#[state] physics_state: &mut PhysicsState) {
-    println!("processing movement");
-
-    physics_state.pipeline.step(
-        &physics_state.gravity,
-        &physics_state.integration_parameters,
-        &mut physics_state.broad_phase,
-        &mut physics_state.narrow_phase,
-        &mut physics_state.bodies,
-        &mut physics_state.colliders,
-        &mut physics_state.joints,
-        &(),
-    );
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct RigidBody {
-    
-}
-
-struct Velocity {
-    linear_x: f32,
-    linear_y: f32,
-    linear_z: f32,
-    angular_x: f32,
-    angular_y: f32,
-    angular_z: f32,
-}
-
-
-//TODO: Abstract into trait
-struct NetworkedObserver {
-    connection_id: String,
-    //TODO: Handler
-    //TODO: Socket
-}
-
-impl NetworkedObserver {
-    fn new(connection_id: String) -> Self { 
-        Self {
-            connection_id: connection_id,
-        }
-    }
-}
-
-
-#[derive(Clone)]
-struct WorldContext {
-    // Connection Id that this context is referenced to
-    connection_id: String,
+pub struct WorldContext {
+    // Unique storage / global / context ID assosiated with this context
+    object_id: String,
     // Primary entity that this context drives.
     // Todo see if we can get away with not having a rwlock?
     entity_id: Entity,
-    // Primary region that this context drives
-    region: Arc<RwLock<RegionInstance>>,
+
+    // Current attached communication channels for active region this world context exists in
+    region_intent_sender: Arc<RwLock<Option<mpsc::UnboundedSender<Box<dyn EntityUpdate>>>>>,
+    region_update_receiver: Arc<Mutex<Option<broadcast::Receiver<Box<dyn Intent>>>>>,
 }
 
 impl WorldContext {
-    fn new(region: RegionInstance, connection_id: String, entity_id: Entity) -> Self {
+    pub fn new(
+        object_id: String,
+        entity_id: Entity,
+        intent_sender: mpsc::UnboundedSender<Box<dyn EntityUpdate>>,
+        update_broadcast_receiver: broadcast::Receiver<Box<dyn Intent>>,
+    ) -> Self {
         Self {
-            connection_id: connection_id,
+            object_id: object_id,
             entity_id: entity_id,
-            region: Arc::new(RwLock::new(region)),
+            region_intent_sender: Arc::new(RwLock::new(Some(intent_sender))),
+            region_update_receiver: Arc::new(Mutex::new(Some(update_broadcast_receiver))),
         }
     }
 
-    pub async fn submit_intent<T: Any + Sized + Send + Sync>(&self, component: T) -> Result<(), IntentError> {
-        let region = self.region.read().await;
-        region.upsert_component(self.entity_id, component)
+    pub async fn submit_intent<T: Any + Sized + Send + Sync>(
+        &self,
+        component: T,
+    ) -> Result<(), IntentError> {
+        let region_intent_sender = self.region_intent_sender.read().await;
+        match region_intent_sender
+            .as_ref()
+            .unwrap()
+            .send(Box::new(UpdateComponent::new(self.entity_id, component)))
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                println!(
+                    "cannot submit intent for world_context {} with err {}",
+                    self.object_id, e
+                );
+                Err(IntentError)
+            }
+        }
+    }
+
+    pub async fn update_context(
+        &self,
+        intent_sender: mpsc::UnboundedSender<Box<dyn EntityUpdate>>,
+        update_broadcast_receiver: broadcast::Receiver<Box<dyn Intent>>,
+    ) {
+        // Ensure we drop the lock in between operations
+        {
+            let mut region_intent_sender = self.region_intent_sender.write().await;
+            region_intent_sender.replace(intent_sender);
+        }
+
+        let mut region_update_receiver = self.region_update_receiver.lock().await;
+        region_update_receiver.replace(update_broadcast_receiver);
+    }
+
+    pub async fn watch_updates(&self, update_handler: fn(Box<dyn Intent>)) {
+        loop {
+            let mut region_update_receiver = self.region_update_receiver.lock().await;
+
+            match region_update_receiver.as_mut().unwrap().try_recv() {
+                Ok(update) => update_handler(update),
+                Err(e) => {
+                    //TODO: Check empty vs lagged
+                    println!("error occured while proccessing broadcast channel! consider increasing channel size. {}", e)
+                }
+            }
+        }
     }
 }
 
 pub struct WorldInstance {
     id: String,
     regions: Vec<Vec<RegionInstance>>,
-    region_width_x: i32,
-    region_width_y: i32,
-    
+    region_x_count: i32,
+    region_y_count: i32,
+    tick_rate_hz: i32,
 }
 
 impl WorldInstance {
-    pub fn new(id: String, width_x: i32, width_y: i32, tick_rate_hz: u8) -> WorldInstance {
-        let mut regions = vec![vec![RegionInstance::new(); width_y as usize]; width_x as usize];
-        
-        let mut x = 0;
-        for region_x_iterator in regions.iter_mut() {
-            let mut y = 0;
-            for region in region_x_iterator.iter_mut() {
-                region.x = x as i32;
-                region.y = y as i32;
-                y += 1;
+    pub fn new(
+        id: String,
+        region_x_count: i32,
+        region_y_count: i32,
+        region_width_x: i32,
+        region_width_y: i32,
+        tick_rate_hz: i32,
+    ) -> WorldInstance {
+        let mut regions: Vec<Vec<RegionInstance>> = Vec::new();
+
+        for x in 0..region_x_count {
+            for y in 0..region_y_count {
+                regions[x as usize][y as usize] = RegionInstance::new(x, y);
             }
-            x += 1;
         }
-        
+
         WorldInstance {
             id: id,
             regions: regions,
-            region_width_x: width_x,
-            region_width_y: width_y,
+            region_x_count: region_x_count,
+            region_y_count: region_y_count,
+            tick_rate_hz: tick_rate_hz,
         }
     }
 
     // This async func can take some time!
-    pub async fn create_context(&self, region_x: i32, region_y:i32, observer: NetworkedObserver) -> WorldContext {
-        let region = self.regions[region_x as usize][region_y as usize].clone();
-        let cloned_region = region.clone();
-        let connection_id = observer.connection_id.to_owned();
-        //TODO: Register surrounding regions
-        let entity_id = region.register_observer(observer).await;
-        WorldContext::new(cloned_region, connection_id, entity_id.unwrap())
+    pub async fn create_context(
+        &self,
+        region_x: i32,
+        region_y: i32,
+        object_id: String,
+    ) -> WorldContext {
+        //TODO: Validate x/y and throw exception
+        let region = &self.regions[region_x as usize][region_y as usize];
+        region.create_world_context(object_id).await
     }
 
-    pub fn run(&self) {
+    pub async fn run(&mut self) {
         self.run_simulation(u64::MAX);
     }
 
-    pub fn run_simulation(&self, simulate_tick_count: u64) {
-        let region_x_itr = self.regions.to_owned();
-        for region_x_iterator in region_x_itr {
-            for region in region_x_iterator {
-                task::spawn_blocking(move || {
-                    println!("preparing to run region {} {}", region.x, region.y);
-
-                    let schedule = Rc::new(RefCell::new(Schedule::builder()
-                        .add_system(region_system(region.clone()))
-                        .add_system(movement_system(PhysicsState::new(60)))
-                        .flush()
-                        .build()));
-
-                    region.run_simulation(schedule, simulate_tick_count);
-                });
-            }
-        }
-    }
-}
-
-//TODO: Create system that moves vec items 
-
-
-trait EntityUpdate : Send + Sync {
-    fn process_update(self: Box<Self>, cmd: &mut CommandBuffer);
-}
-
-struct UpdateComponent<T> where T : Any + Sized + Send + Sync   {
-    entity_id: Entity,
-    component: T,
-}
-
-impl<T: Component> EntityUpdate for UpdateComponent<T> {
-    fn process_update(self: Box<Self>, cmd: &mut CommandBuffer) {
-        cmd.add_component(self.entity_id, self.component);
-    }
-}
-
-impl<T: Any + Sized + Send + Sync> UpdateComponent<T> {
-    fn new(entity_id: Entity, component: T) -> Self {
-        Self {
-            entity_id: entity_id,
-            component: component,
-        }
-    }
-}
-
-struct RegisterContext {
-    on_registered_channel: Sender<Entity>,
-    connection_id: String,
-}
-
-impl RegisterContext {
-    fn new(on_ready: Sender<Entity>, connection_id: String) -> Self {
-        Self {
-            on_registered_channel: on_ready,
-            connection_id: connection_id,
-        }
-    }
-}
-
-impl EntityUpdate for RegisterContext {
-    fn process_update(self: Box<Self>, cmd: &mut CommandBuffer) {
-        let connection_id = self.connection_id.to_owned();
-        //TODO: Figure out how to get the lock?
-        let entity_id = cmd.push((connection_id,));
-        
-        self.on_registered_channel.send(entity_id);        
-    }
-}
-
-
-#[derive(Clone)]
-struct RegionInstance {
-    x: i32,
-    y: i32,
-    tick_rate_hz: i8,
-    sleeping: bool,
-    events_sender: Arc<UnboundedSender<Box<dyn EntityUpdate>>>,
-    events_receiver: Arc<Mutex<UnboundedReceiver<Box<dyn EntityUpdate>>>>,
-    // Observers to broadcast updates each tick
-    observers: Arc<RwLock<HashMap<String, NetworkedObserver>>>,
-}
-
-
-impl RegionInstance {
-    fn new() -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
-        Self {
-            x: 0,
-            y: 0,
-            tick_rate_hz: 60,
-            sleeping: false,
-            events_sender: Arc::new(tx),
-            events_receiver: Arc::new(Mutex::new(rx)),
-            observers: Arc::new(RwLock::new(HashMap::new()))
-        }
-    }
-
-    fn process_updates(&mut self, cmd: &mut CommandBuffer) {
-        let mut events_receiver = self.events_receiver.lock().unwrap();
-        while let Ok(update) = events_receiver.try_recv() {
-            update.process_update(cmd);
-        }
-
-        println!("successfully processed region x:{}, y:{}", self.x, self.y);
-    }
-
-    async fn register_observer(self, observer: NetworkedObserver) -> Option<Entity> {
-        let (channel_sender, channel_receiver) = oneshot::channel();
-        let region = self.clone();
-        let connection_id = observer.connection_id.to_owned();
-        let register = RegisterContext::new( channel_sender, connection_id);
-
-        self.events_sender.send(Box::new(register));
-
-        let mut observers = region.observers.write().await;
-        observers.insert(observer.connection_id.to_owned(), observer);
-
-        match channel_receiver.await {
-            Ok(e) => Some(e),
-            Err(e) => {
-                println!("error creating entity {}", e);
-                None
-            },
-        }
-    }
-
-    pub fn upsert_component<T: Any + Sized + Send + Sync>(&self, entity_id: Entity, component: T) -> Result<(), IntentError> {
-        match self.events_sender.send(Box::new(UpdateComponent::new(entity_id, component))) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(IntentError)
-        }
-    }
-
-    fn run(&self, ecs_schedule: Rc<RefCell<Schedule>>) {
-        self.run_simulation(ecs_schedule, u64::MAX);
-    }
-
-    fn run_simulation(&self, ecs_schedule: Rc<RefCell<Schedule>>, simulate_tick_count: u64) {
-        let mut world = World::default();
-        let mut resources = Resources::default();
+    // As per tokio's suggestion, using raynon for blocking CPU bound execution of each tick
+    // We will use tokio for I/O and Rayon for heavy physics/update dispatching
+    // https://docs.rs/tokio/0.3.2/tokio/task/fn.spawn_blocking.html
+    pub async fn run_simulation(&mut self, simulate_tick_count: u64) {
+        let mut tick = 0u64;
         // 60 hz = one tick every 16.67 ms or .0167 seconds
-        let tick_rate_seconds = 1f32 / self.tick_rate_hz as f32;
-        let mut start_tick_time = SystemTime::now();
-        let mut tick = 1u64;
-
+        let tick_rate_duration = Duration::from_secs_f32(1f32 / self.tick_rate_hz as f32);
         loop {
-            let elapsed_time_since_last_tick_secs = start_tick_time.elapsed().unwrap().as_secs_f32();
-
-            // Sleep until next tick
-            // TODO: Check if elapsedTime > tick rate seconds, which means the system is falling behind!
-            if elapsed_time_since_last_tick_secs < tick_rate_seconds {
-                sleep(Duration::from_secs_f32(tick_rate_seconds - elapsed_time_since_last_tick_secs));
-            } else {
-                println!("tick rate is lagging and behind by {} seconds", elapsed_time_since_last_tick_secs-tick_rate_seconds)
-            }
-            
-            // Reset time at the start of this current tick
-            start_tick_time = SystemTime::now();
-
-            // Set latest tick
-            resources.insert(Tick(tick));
-
-            // Execute tick
-            ecs_schedule.borrow_mut().execute(&mut world, &mut resources);
-
-            println!("Region x:{}, y:{} completed tick {} in total µs: {}",
-                self.x,
-                self.y,
-                tick,
-                start_tick_time.elapsed().unwrap().as_micros());
-
+            rayon::scope(|s| {
+                for regions_x in self.regions.iter_mut() {
+                    for region in regions_x.iter_mut() {
+                        let r = region;
+                        s.spawn(move |_| { 
+                            r.run_simulation(simulate_tick_count);
+                        });
+                    }
+                }
+            });
 
             if tick == simulate_tick_count {
                 break;
             }
-
+    
             // Increment tick counter and reset once hitting max
             if tick == u64::MAX {
                 tick = 1;
@@ -376,31 +191,30 @@ impl RegionInstance {
             } else if simulate_tick_count == tick {
                 break;
             }
+
+            tokio::time::sleep_until(tokio::time::Instant::now() + tick_rate_duration).await
         }
     }
 }
-
-extern crate test;
 
 #[cfg(test)]
 mod tests {
     use crate::protos::components::Position;
 
     use super::*;
-    use test::Bencher;
     use tokio_test::assert_ok;
 
     #[test]
     fn new_world_test() {
         let id = "1";
         let world = WorldInstance::new(String::from(id), 5, 5, 60);
-    
+
         assert_eq!(world.id, id);
         assert_eq!(world.regions.len(), 5);
         assert_eq!(world.regions[0].len(), 5);
-    
+
         let region = &world.regions[1][3];
-    
+
         assert_eq!(region.x, 1);
         assert_eq!(region.y, 3);
     }
@@ -410,16 +224,14 @@ mod tests {
         let connection_id = "100";
         let world = WorldInstance::new(String::from("1"), 5, 5, 60);
         world.run_simulation(1); // Run only 1 ticks... otherwise the program runs forever
-        let observer = NetworkedObserver::new(String::from(connection_id));
         let context = world.create_context(0, 0, observer).await;
         let result = context.submit_intent(Position::default()).await;
-        println!("created world context connection_id: {}, entity_id: {:?}", context.connection_id, context.entity_id);
+        println!(
+            "created world context connection_id: {}, entity_id: {:?}",
+            context.object_id, context.entity_id
+        );
 
         assert_eq!(connection_id, context.connection_id);
         assert_ok!(result);
-    }
-    
-    #[bench]
-    fn run_world_test(b: &mut Bencher) {
     }
 }
