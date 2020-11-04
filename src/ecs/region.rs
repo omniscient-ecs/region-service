@@ -1,17 +1,27 @@
-use crate::{ecs::world::WorldContext, protos::components::Position};
+use crate::{ecs::world::WorldContext};
 use core::any::Any;
-use core::time::Duration;
+use std::sync::Arc;
+
 use dyn_clone::DynClone;
 use legion::Entity;
 use legion::Resources;
-use legion::{Schedule, World};
-use std::{sync::atomic::AtomicBool, fmt};
-use std::sync::Arc;
-use std::{thread::sleep, time::SystemTime};
+use legion::World;
+use std::fmt;
+
+use std::time::SystemTime;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::*;
 
-use super::physics::PhysicsState;
+use super::simulation::Simulation;
+
+pub struct Tick(u64);
+pub struct DeltaTime(f32);
+
+impl DeltaTime {
+    pub fn time_since_last_tick_secs(&self) -> f32 {
+        self.0
+    }
+}
 
 pub struct IntentError;
 
@@ -21,8 +31,6 @@ impl fmt::Debug for IntentError {
         write!(f, "Could not register intent")
     }
 }
-
-struct Tick(u64);
 
 pub trait EntityUpdate: Send + Sync {
     fn process_update(self: Box<Self>, world: &mut World);
@@ -103,15 +111,13 @@ impl<T: Any + Sized + Send + Sync + protobuf::Message + Clone> ClientIntent<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct RegionInstance {
     x: i32,
     y: i32,
-    tick_rate_hz: i8,
-    sleeping: bool,
     intent_sender: mpsc::UnboundedSender<Box<dyn EntityUpdate>>,
-    intent_receiver: UnboundedReceiver<Box<dyn EntityUpdate>>,
+    intent_receiver: Arc<Mutex<UnboundedReceiver<Box<dyn EntityUpdate>>>>,
     update_broadcast_sender: broadcast::Sender<Box<dyn Intent>>,
-    world: World,
 }
 
 impl RegionInstance {
@@ -119,25 +125,29 @@ impl RegionInstance {
         let (intent_sender, intent_receiver) = mpsc::unbounded_channel();
         // TODO: Make broadcast receiver configurable via env var
         //TODO: Is there a nicer way to ignore receiver?
-        let (update_broadcast_sender, receiver) = broadcast::channel(1000);
+        let (update_broadcast_sender, _receiver) = broadcast::channel(1000);
         Self {
             x: x,
             y: y,
-            tick_rate_hz: 60,
-            sleeping: false,
             intent_sender: intent_sender,
-            intent_receiver: intent_receiver,
+            intent_receiver: Arc::new(Mutex::new(intent_receiver)),
             update_broadcast_sender: update_broadcast_sender,
-            world: World::default(),
         }
     }
 
-    pub fn process_updates(&mut self) {
-        while let Ok(update) = self.intent_receiver.try_recv() {
-            update.process_update(&mut self.world);
+    pub fn process_updates(&mut self, world: &mut World) {
+        // NOTE: This lock should be 100%. If it ever panics, something seriously is wrong
+        let mut intent_receiver = self.intent_receiver.try_lock().unwrap();
+        let mut update_count = 0;
+        while let Ok(update) = intent_receiver.try_recv() {
+            update.process_update(world);
+            update_count += 1;
         }
 
-        println!("successfully processed region x:{}, y:{}", self.x, self.y);
+        println!(
+            "successfully processed {} updates for region x:{}, y:{}",
+            update_count, self.x, self.y
+        );
     }
 
     // Creates a new world context with the specified global unique object id and region channel assosiated with this region
@@ -161,8 +171,6 @@ impl RegionInstance {
     // Registers world context to this specific region.
     // This makes it so the WorldContext send intents and receive updates are contextual to this region
     async fn register_context(&self, world_context: WorldContext) {
-        self.update_broadcast_sender
-            .send(Box::new(ClientIntent::new(Position::default())));
         world_context
             .update_context(
                 self.intent_sender.clone(),
@@ -181,42 +189,51 @@ impl RegionInstance {
             .send(Box::new(UpdateComponent::new(entity_id, component)))
         {
             Ok(_) => Ok(()),
-            Err(e) => Err(IntentError),
+            Err(_e) => Err(IntentError),
         }
     }
 
-    pub fn run_simulation(&mut self, tick: u64) {
-        let mut resources = Resources::default();
-        
-        let mut start_tick_time = SystemTime::now();
-        let mut physics_state = PhysicsState::new(60);
-
-        let elapsed_time_since_last_tick_secs =
-            start_tick_time.elapsed().unwrap().as_secs_f32();
-
-        // Reset time at the start of this current tick
-        start_tick_time = SystemTime::now();
-
-        // Set latest tick
-        resources.insert(Tick(tick));
-
+    pub fn process_tick(&mut self, simulation: &mut Simulation) {
+        let start_tick_time = SystemTime::now();
+        let last_tick_time = simulation.last_tick_time();
+        let tick_rate_secs = simulation.tick_rate_secs();
+        let tick = simulation.tick();
+        let mut world = simulation.world_mut();
         // 1. Process all intents
-        self.process_updates();
+        self.process_updates(&mut world);
 
-        // 2. Perform physics tick
-        physics_state.tick();
+        let mut resources = Resources::default();
 
-        // Execute tick
-        //schedule.execute(&mut self.world, &mut resources);
+        // Set resources for processing ECS
+        resources.insert(Tick(tick));
+        resources.insert(DeltaTime(last_tick_time.elapsed().unwrap().as_secs_f32()));
+
+        // 3. Execute tick ECS schedule
+        simulation.execute_schedule(&mut resources);
+
+        let process_tick_duration = start_tick_time.elapsed().unwrap().as_secs_f32();
+
+        if process_tick_duration <= tick_rate_secs {
+            // Successfully completed tick less than duration rate
+            simulation.update_tick_data(
+                tick + 1,
+                start_tick_time,
+                tick_rate_secs - process_tick_duration,
+            );
+        } else {
+            // Server could not process tick fast enough {
+            // Calculate next tick by skipping all ticks that were missed
+            let next_tick = (process_tick_duration / tick_rate_secs).ceil() as u64;
+            let next_tick_start_secs = tick_rate_secs - (process_tick_duration % tick_rate_secs);
+            simulation.update_tick_data(next_tick, start_tick_time, next_tick_start_secs);
+        }
 
         println!(
-            "Region x:{}, y:{} completed tick {} in total µs: {}",
+            "successfully processed tick {} in {}us for region x:{} y:{}",
+            tick,
+            start_tick_time.elapsed().unwrap().as_micros(),
             self.x,
             self.y,
-            tick,
-            start_tick_time.elapsed().unwrap().as_micros()
         );
-
-       
     }
 }

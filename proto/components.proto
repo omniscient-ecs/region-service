@@ -1,13 +1,15 @@
 syntax = "proto3";
 
-import "google/protobuf/any.proto";
-
-
-message Position {
-    int32 x = 1;
+message MoveIntent {
+    // TODO: Optimize into byte enum flag
+    bool forward = 1;
+    bool backward = 2;
+    bool left = 3;
+    bool right = 4;
 }
 
-
-message Intent {
-    google.protobuf.Any data = 1;    
+message Velocity {
+    float velocity_x = 1;
+    float velocity_y = 2;
+    float velocity_z = 3;
 }

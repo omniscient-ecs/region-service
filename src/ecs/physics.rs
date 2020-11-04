@@ -1,17 +1,11 @@
-use rapier3d::dynamics::JointSet;
-use rapier3d::geometry::NarrowPhase;
-use rapier3d::{dynamics::IntegrationParameters, na::Vector3, pipeline::PhysicsPipeline};
 use rapier3d::{
-    dynamics::RigidBodySet,
-    geometry::{BroadPhase, ColliderSet},
+    na::Vector3,
+    pipeline::PhysicsPipeline,
+    dynamics::{IntegrationParameters, RigidBodySet, JointSet},
+    geometry::{BroadPhase, ColliderSet, NarrowPhase},
 };
 
-pub(crate) struct MovementSystemConfig {
-    always_send_update_on_tick: bool,
-}
-
-pub(crate) struct PhysicsState {
-    config: MovementSystemConfig,
+pub struct PhysicsState {
     pipeline: PhysicsPipeline,
     gravity: Vector3<f32>,
     integration_parameters: IntegrationParameters,
@@ -23,17 +17,11 @@ pub(crate) struct PhysicsState {
 }
 
 impl PhysicsState {
-    pub fn new(tick_rate_hz: u8) -> Self {
-        let mut integration_parameters = IntegrationParameters::default();
-        integration_parameters.set_dt(1f32 / tick_rate_hz as f32);
-
+    pub fn new() -> Self {
         Self {
-            config: MovementSystemConfig {
-                always_send_update_on_tick: true,
-            },
             pipeline: PhysicsPipeline::new(),
             gravity: Vector3::new(0.0, -9.81, 0.0),
-            integration_parameters: integration_parameters,
+            integration_parameters: IntegrationParameters::default(),
             broad_phase: BroadPhase::new(),
             narrow_phase: NarrowPhase::new(),
             bodies: RigidBodySet::new(),
@@ -42,7 +30,9 @@ impl PhysicsState {
         }
     }
 
-    pub fn tick(&mut self) {
+    pub fn process_tick(&mut self, time_since_last_tick_secs: f32) {
+        self.integration_parameters
+            .set_dt(time_since_last_tick_secs);
         self.pipeline.step(
             &self.gravity,
             &self.integration_parameters,

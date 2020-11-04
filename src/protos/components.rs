@@ -24,42 +24,90 @@
 // const _PROTOBUF_VERSION_CHECK: () = ::protobuf::VERSION_2_18_0;
 
 #[derive(PartialEq,Clone,Default)]
-pub struct Position {
+pub struct MoveIntent {
     // message fields
-    pub x: i32,
+    pub forward: bool,
+    pub backward: bool,
+    pub left: bool,
+    pub right: bool,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
 }
 
-impl<'a> ::std::default::Default for &'a Position {
-    fn default() -> &'a Position {
-        <Position as ::protobuf::Message>::default_instance()
+impl<'a> ::std::default::Default for &'a MoveIntent {
+    fn default() -> &'a MoveIntent {
+        <MoveIntent as ::protobuf::Message>::default_instance()
     }
 }
 
-impl Position {
-    pub fn new() -> Position {
+impl MoveIntent {
+    pub fn new() -> MoveIntent {
         ::std::default::Default::default()
     }
 
-    // int32 x = 1;
+    // bool forward = 1;
 
 
-    pub fn get_x(&self) -> i32 {
-        self.x
+    pub fn get_forward(&self) -> bool {
+        self.forward
     }
-    pub fn clear_x(&mut self) {
-        self.x = 0;
+    pub fn clear_forward(&mut self) {
+        self.forward = false;
     }
 
     // Param is passed by value, moved
-    pub fn set_x(&mut self, v: i32) {
-        self.x = v;
+    pub fn set_forward(&mut self, v: bool) {
+        self.forward = v;
+    }
+
+    // bool backward = 2;
+
+
+    pub fn get_backward(&self) -> bool {
+        self.backward
+    }
+    pub fn clear_backward(&mut self) {
+        self.backward = false;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_backward(&mut self, v: bool) {
+        self.backward = v;
+    }
+
+    // bool left = 3;
+
+
+    pub fn get_left(&self) -> bool {
+        self.left
+    }
+    pub fn clear_left(&mut self) {
+        self.left = false;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_left(&mut self, v: bool) {
+        self.left = v;
+    }
+
+    // bool right = 4;
+
+
+    pub fn get_right(&self) -> bool {
+        self.right
+    }
+    pub fn clear_right(&mut self) {
+        self.right = false;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_right(&mut self, v: bool) {
+        self.right = v;
     }
 }
 
-impl ::protobuf::Message for Position {
+impl ::protobuf::Message for MoveIntent {
     fn is_initialized(&self) -> bool {
         true
     }
@@ -72,8 +120,29 @@ impl ::protobuf::Message for Position {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
-                    let tmp = is.read_int32()?;
-                    self.x = tmp;
+                    let tmp = is.read_bool()?;
+                    self.forward = tmp;
+                },
+                2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_bool()?;
+                    self.backward = tmp;
+                },
+                3 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_bool()?;
+                    self.left = tmp;
+                },
+                4 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_bool()?;
+                    self.right = tmp;
                 },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
@@ -87,8 +156,17 @@ impl ::protobuf::Message for Position {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        if self.x != 0 {
-            my_size += ::protobuf::rt::value_size(1, self.x, ::protobuf::wire_format::WireTypeVarint);
+        if self.forward != false {
+            my_size += 2;
+        }
+        if self.backward != false {
+            my_size += 2;
+        }
+        if self.left != false {
+            my_size += 2;
+        }
+        if self.right != false {
+            my_size += 2;
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
@@ -96,8 +174,17 @@ impl ::protobuf::Message for Position {
     }
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
-        if self.x != 0 {
-            os.write_int32(1, self.x)?;
+        if self.forward != false {
+            os.write_bool(1, self.forward)?;
+        }
+        if self.backward != false {
+            os.write_bool(2, self.backward)?;
+        }
+        if self.left != false {
+            os.write_bool(3, self.left)?;
+        }
+        if self.right != false {
+            os.write_bool(4, self.right)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -129,113 +216,140 @@ impl ::protobuf::Message for Position {
         Self::descriptor_static()
     }
 
-    fn new() -> Position {
-        Position::new()
+    fn new() -> MoveIntent {
+        MoveIntent::new()
     }
 
     fn descriptor_static() -> &'static ::protobuf::reflect::MessageDescriptor {
         static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::LazyV2::INIT;
         descriptor.get(|| {
             let mut fields = ::std::vec::Vec::new();
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt32>(
-                "x",
-                |m: &Position| { &m.x },
-                |m: &mut Position| { &mut m.x },
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeBool>(
+                "forward",
+                |m: &MoveIntent| { &m.forward },
+                |m: &mut MoveIntent| { &mut m.forward },
             ));
-            ::protobuf::reflect::MessageDescriptor::new_pb_name::<Position>(
-                "Position",
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeBool>(
+                "backward",
+                |m: &MoveIntent| { &m.backward },
+                |m: &mut MoveIntent| { &mut m.backward },
+            ));
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeBool>(
+                "left",
+                |m: &MoveIntent| { &m.left },
+                |m: &mut MoveIntent| { &mut m.left },
+            ));
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeBool>(
+                "right",
+                |m: &MoveIntent| { &m.right },
+                |m: &mut MoveIntent| { &mut m.right },
+            ));
+            ::protobuf::reflect::MessageDescriptor::new_pb_name::<MoveIntent>(
+                "MoveIntent",
                 fields,
                 file_descriptor_proto()
             )
         })
     }
 
-    fn default_instance() -> &'static Position {
-        static instance: ::protobuf::rt::LazyV2<Position> = ::protobuf::rt::LazyV2::INIT;
-        instance.get(Position::new)
+    fn default_instance() -> &'static MoveIntent {
+        static instance: ::protobuf::rt::LazyV2<MoveIntent> = ::protobuf::rt::LazyV2::INIT;
+        instance.get(MoveIntent::new)
     }
 }
 
-impl ::protobuf::Clear for Position {
+impl ::protobuf::Clear for MoveIntent {
     fn clear(&mut self) {
-        self.x = 0;
+        self.forward = false;
+        self.backward = false;
+        self.left = false;
+        self.right = false;
         self.unknown_fields.clear();
     }
 }
 
-impl ::std::fmt::Debug for Position {
+impl ::std::fmt::Debug for MoveIntent {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-impl ::protobuf::reflect::ProtobufValue for Position {
+impl ::protobuf::reflect::ProtobufValue for MoveIntent {
     fn as_ref(&self) -> ::protobuf::reflect::ReflectValueRef {
         ::protobuf::reflect::ReflectValueRef::Message(self)
     }
 }
 
 #[derive(PartialEq,Clone,Default)]
-pub struct Intent {
+pub struct Velocity {
     // message fields
-    pub data: ::protobuf::SingularPtrField<::protobuf::well_known_types::Any>,
+    pub velocity_x: f32,
+    pub velocity_y: f32,
+    pub velocity_z: f32,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
 }
 
-impl<'a> ::std::default::Default for &'a Intent {
-    fn default() -> &'a Intent {
-        <Intent as ::protobuf::Message>::default_instance()
+impl<'a> ::std::default::Default for &'a Velocity {
+    fn default() -> &'a Velocity {
+        <Velocity as ::protobuf::Message>::default_instance()
     }
 }
 
-impl Intent {
-    pub fn new() -> Intent {
+impl Velocity {
+    pub fn new() -> Velocity {
         ::std::default::Default::default()
     }
 
-    // .google.protobuf.Any data = 1;
+    // float velocity_x = 1;
 
 
-    pub fn get_data(&self) -> &::protobuf::well_known_types::Any {
-        self.data.as_ref().unwrap_or_else(|| <::protobuf::well_known_types::Any as ::protobuf::Message>::default_instance())
+    pub fn get_velocity_x(&self) -> f32 {
+        self.velocity_x
     }
-    pub fn clear_data(&mut self) {
-        self.data.clear();
-    }
-
-    pub fn has_data(&self) -> bool {
-        self.data.is_some()
+    pub fn clear_velocity_x(&mut self) {
+        self.velocity_x = 0.;
     }
 
     // Param is passed by value, moved
-    pub fn set_data(&mut self, v: ::protobuf::well_known_types::Any) {
-        self.data = ::protobuf::SingularPtrField::some(v);
+    pub fn set_velocity_x(&mut self, v: f32) {
+        self.velocity_x = v;
     }
 
-    // Mutable pointer to the field.
-    // If field is not initialized, it is initialized with default value first.
-    pub fn mut_data(&mut self) -> &mut ::protobuf::well_known_types::Any {
-        if self.data.is_none() {
-            self.data.set_default();
-        }
-        self.data.as_mut().unwrap()
+    // float velocity_y = 2;
+
+
+    pub fn get_velocity_y(&self) -> f32 {
+        self.velocity_y
+    }
+    pub fn clear_velocity_y(&mut self) {
+        self.velocity_y = 0.;
     }
 
-    // Take field
-    pub fn take_data(&mut self) -> ::protobuf::well_known_types::Any {
-        self.data.take().unwrap_or_else(|| ::protobuf::well_known_types::Any::new())
+    // Param is passed by value, moved
+    pub fn set_velocity_y(&mut self, v: f32) {
+        self.velocity_y = v;
+    }
+
+    // float velocity_z = 3;
+
+
+    pub fn get_velocity_z(&self) -> f32 {
+        self.velocity_z
+    }
+    pub fn clear_velocity_z(&mut self) {
+        self.velocity_z = 0.;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_velocity_z(&mut self, v: f32) {
+        self.velocity_z = v;
     }
 }
 
-impl ::protobuf::Message for Intent {
+impl ::protobuf::Message for Velocity {
     fn is_initialized(&self) -> bool {
-        for v in &self.data {
-            if !v.is_initialized() {
-                return false;
-            }
-        };
         true
     }
 
@@ -244,7 +358,25 @@ impl ::protobuf::Message for Intent {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.data)?;
+                    if wire_type != ::protobuf::wire_format::WireTypeFixed32 {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_float()?;
+                    self.velocity_x = tmp;
+                },
+                2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeFixed32 {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_float()?;
+                    self.velocity_y = tmp;
+                },
+                3 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeFixed32 {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_float()?;
+                    self.velocity_z = tmp;
                 },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
@@ -258,9 +390,14 @@ impl ::protobuf::Message for Intent {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        if let Some(ref v) = self.data.as_ref() {
-            let len = v.compute_size();
-            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+        if self.velocity_x != 0. {
+            my_size += 5;
+        }
+        if self.velocity_y != 0. {
+            my_size += 5;
+        }
+        if self.velocity_z != 0. {
+            my_size += 5;
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
@@ -268,10 +405,14 @@ impl ::protobuf::Message for Intent {
     }
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
-        if let Some(ref v) = self.data.as_ref() {
-            os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
-            os.write_raw_varint32(v.get_cached_size())?;
-            v.write_to_with_cached_sizes(os)?;
+        if self.velocity_x != 0. {
+            os.write_float(1, self.velocity_x)?;
+        }
+        if self.velocity_y != 0. {
+            os.write_float(2, self.velocity_y)?;
+        }
+        if self.velocity_z != 0. {
+            os.write_float(3, self.velocity_z)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -303,57 +444,72 @@ impl ::protobuf::Message for Intent {
         Self::descriptor_static()
     }
 
-    fn new() -> Intent {
-        Intent::new()
+    fn new() -> Velocity {
+        Velocity::new()
     }
 
     fn descriptor_static() -> &'static ::protobuf::reflect::MessageDescriptor {
         static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::LazyV2::INIT;
         descriptor.get(|| {
             let mut fields = ::std::vec::Vec::new();
-            fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<::protobuf::well_known_types::Any>>(
-                "data",
-                |m: &Intent| { &m.data },
-                |m: &mut Intent| { &mut m.data },
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeFloat>(
+                "velocity_x",
+                |m: &Velocity| { &m.velocity_x },
+                |m: &mut Velocity| { &mut m.velocity_x },
             ));
-            ::protobuf::reflect::MessageDescriptor::new_pb_name::<Intent>(
-                "Intent",
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeFloat>(
+                "velocity_y",
+                |m: &Velocity| { &m.velocity_y },
+                |m: &mut Velocity| { &mut m.velocity_y },
+            ));
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeFloat>(
+                "velocity_z",
+                |m: &Velocity| { &m.velocity_z },
+                |m: &mut Velocity| { &mut m.velocity_z },
+            ));
+            ::protobuf::reflect::MessageDescriptor::new_pb_name::<Velocity>(
+                "Velocity",
                 fields,
                 file_descriptor_proto()
             )
         })
     }
 
-    fn default_instance() -> &'static Intent {
-        static instance: ::protobuf::rt::LazyV2<Intent> = ::protobuf::rt::LazyV2::INIT;
-        instance.get(Intent::new)
+    fn default_instance() -> &'static Velocity {
+        static instance: ::protobuf::rt::LazyV2<Velocity> = ::protobuf::rt::LazyV2::INIT;
+        instance.get(Velocity::new)
     }
 }
 
-impl ::protobuf::Clear for Intent {
+impl ::protobuf::Clear for Velocity {
     fn clear(&mut self) {
-        self.data.clear();
+        self.velocity_x = 0.;
+        self.velocity_y = 0.;
+        self.velocity_z = 0.;
         self.unknown_fields.clear();
     }
 }
 
-impl ::std::fmt::Debug for Intent {
+impl ::std::fmt::Debug for Velocity {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         ::protobuf::text_format::fmt(self, f)
     }
 }
 
-impl ::protobuf::reflect::ProtobufValue for Intent {
+impl ::protobuf::reflect::ProtobufValue for Velocity {
     fn as_ref(&self) -> ::protobuf::reflect::ReflectValueRef {
         ::protobuf::reflect::ReflectValueRef::Message(self)
     }
 }
 
 static file_descriptor_proto_data: &'static [u8] = b"\
-    \n\x16proto/components.proto\x1a\x19google/protobuf/any.proto\"\x18\n\
-    \x08Position\x12\x0c\n\x01x\x18\x01\x20\x01(\x05R\x01x\"2\n\x06Intent\
-    \x12(\n\x04data\x18\x01\x20\x01(\x0b2\x14.google.protobuf.AnyR\x04datab\
-    \x06proto3\
+    \n\x16proto/components.proto\"l\n\nMoveIntent\x12\x18\n\x07forward\x18\
+    \x01\x20\x01(\x08R\x07forward\x12\x1a\n\x08backward\x18\x02\x20\x01(\x08\
+    R\x08backward\x12\x12\n\x04left\x18\x03\x20\x01(\x08R\x04left\x12\x14\n\
+    \x05right\x18\x04\x20\x01(\x08R\x05right\"g\n\x08Velocity\x12\x1d\n\nvel\
+    ocity_x\x18\x01\x20\x01(\x02R\tvelocityX\x12\x1d\n\nvelocity_y\x18\x02\
+    \x20\x01(\x02R\tvelocityY\x12\x1d\n\nvelocity_z\x18\x03\x20\x01(\x02R\tv\
+    elocityZb\x06proto3\
 ";
 
 static file_descriptor_proto_lazy: ::protobuf::rt::LazyV2<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::rt::LazyV2::INIT;

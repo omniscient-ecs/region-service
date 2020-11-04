@@ -19,3 +19,6 @@ rayon = "1.5"
 
 [build-dependencies]
 protoc-rust = "2.0"
+
+[profile.release]
+debug = true

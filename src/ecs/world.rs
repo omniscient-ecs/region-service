@@ -1,36 +1,17 @@
+use std::{sync::Arc, thread};
+use legion::Entity;
+use core::time::Duration;
+use super::{region::{EntityUpdate, IntentError, UpdateComponent}, simulation::Simulation, system};
 use crate::ecs::region::Intent;
 use crate::ecs::region::RegionInstance;
-use legion::{
-    storage::IntoComponentSource, system, systems::CommandBuffer, Entity, Resources, Schedule,
-    World,
-};
-use rapier3d::dynamics::{IntegrationParameters, JointSet, RigidBodySet};
-use rapier3d::geometry::{BroadPhase, ColliderSet, NarrowPhase};
-use rapier3d::pipeline::PhysicsPipeline;
-use rapier3d::{
-    dynamics::BodyStatus, dynamics::RigidBodyBuilder, na::Isometry3, na::Vector3,
-    pipeline::EventHandler,
-};
-use rayon::prelude::*;
 use std::any::Any;
-use std::cell::RefCell;
-use std::fmt;
-use std::pin::Pin;
-use std::thread::sleep;
-use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration, time::SystemTime};
-use tokio::runtime::Runtime;
-use tokio::sync::oneshot::{self, Sender};
-use tokio::sync::{broadcast, mpsc::error::SendError};
-use tokio::sync::{broadcast::error::TryRecvError, Mutex};
-use tokio::sync::{Notify, RwLock};
-use tokio::task;
+use tokio::sync::Mutex;
+use tokio::sync::RwLock;
+use tokio::time::Instant;
 use tokio::{
-    runtime::Builder,
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
 };
-use rayon::prelude::*;
-
-use super::region::{EntityUpdate, IntentError, UpdateComponent};
+use tokio::{sync::broadcast, task};
 
 pub struct WorldContext {
     // Unique storage / global / context ID assosiated with this context
@@ -59,6 +40,7 @@ impl WorldContext {
         }
     }
 
+    // Submits an intent to be processed by the owned region
     pub async fn submit_intent<T: Any + Sized + Send + Sync>(
         &self,
         component: T,
@@ -80,6 +62,8 @@ impl WorldContext {
         }
     }
 
+    // Updates the context of this world instance to have a new region intent sender and update receiver
+    // This operation happens rarely and only when traveling in between regions
     pub async fn update_context(
         &self,
         intent_sender: mpsc::UnboundedSender<Box<dyn EntityUpdate>>,
@@ -115,7 +99,8 @@ pub struct WorldInstance {
     regions: Vec<Vec<RegionInstance>>,
     region_x_count: i32,
     region_y_count: i32,
-    tick_rate_hz: i32,
+    // Rate at which ticks run at (time between ticks)
+    tick_rate_secs: f32,
 }
 
 impl WorldInstance {
@@ -123,25 +108,31 @@ impl WorldInstance {
         id: String,
         region_x_count: i32,
         region_y_count: i32,
-        region_width_x: i32,
-        region_width_y: i32,
+        _region_width_x: i32,
+        _region_width_y: i32,
         tick_rate_hz: i32,
     ) -> WorldInstance {
-        let mut regions: Vec<Vec<RegionInstance>> = Vec::new();
+        let mut regions_x: Vec<Vec<RegionInstance>> = Vec::new();
 
         for x in 0..region_x_count {
+            let mut regions = Vec::new();
             for y in 0..region_y_count {
-                regions[x as usize][y as usize] = RegionInstance::new(x, y);
+                regions.push(RegionInstance::new(x, y));
             }
+            regions_x.push(regions);
         }
 
         WorldInstance {
             id: id,
-            regions: regions,
+            regions: regions_x,
             region_x_count: region_x_count,
             region_y_count: region_y_count,
-            tick_rate_hz: tick_rate_hz,
+            tick_rate_secs: 1f32 / tick_rate_hz as f32,
         }
+    }
+
+    pub fn tick_rate_secs(&self) -> f32 {
+        self.tick_rate_secs
     }
 
     // This async func can take some time!
@@ -153,85 +144,154 @@ impl WorldInstance {
     ) -> WorldContext {
         //TODO: Validate x/y and throw exception
         let region = &self.regions[region_x as usize][region_y as usize];
+        //TODO: I'm pretty sure there's a better pattern than awaiting at the end of a function?
         region.create_world_context(object_id).await
     }
 
-    pub async fn run(&mut self) {
+    // Runs new simulation for an unlimited amount of ticks
+    // See run_simulation for more information
+    pub fn run(&mut self) {
         self.run_simulation(u64::MAX);
     }
 
-    // As per tokio's suggestion, using raynon for blocking CPU bound execution of each tick
-    // We will use tokio for I/O and Rayon for heavy physics/update dispatching
-    // https://docs.rs/tokio/0.3.2/tokio/task/fn.spawn_blocking.html
-    pub async fn run_simulation(&mut self, simulate_tick_count: u64) {
-        let mut tick = 0u64;
-        // 60 hz = one tick every 16.67 ms or .0167 seconds
-        let tick_rate_duration = Duration::from_secs_f32(1f32 / self.tick_rate_hz as f32);
-        loop {
-            rayon::scope(|s| {
-                for regions_x in self.regions.iter_mut() {
-                    for region in regions_x.iter_mut() {
-                        let r = region;
-                        s.spawn(move |_| { 
-                            r.run_simulation(simulate_tick_count);
-                        });
+    // Runs a simulation with the default builder
+    pub fn run_simulation(&mut self, simulate_tick_count: u64) {
+        let s = self.tick_rate_secs;
+        self.run_simulation_with_builder(simulate_tick_count, &|| {
+            Simulation::new(s)
+        });
+    }
+    // Runs a new simulation based on this world and its regions for the amount of ticks requested
+    // All regions are dispatched into individual threads using tokio
+    // Each region gets its own simulation context for processing
+    pub fn run_simulation_with_builder(&mut self, simulate_tick_count: u64, simulation_builder: &dyn Fn() -> Simulation) {
+        // 60 hz = one tick every 16.67 ms or .0167 second
+        let world_regions = &mut self.regions;
+        world_regions.iter_mut().for_each(|regions| {
+            regions.iter_mut().for_each(|region| {
+                let mut r = region.clone();
+                let mut simulation = simulation_builder();
+                //TODO: Remove to dedicated thread pool, leaving the default pool for I/O operations only.
+                // Note: Tried rayon vs tokio spawn_blocking, rayon requires specific thread pool tuning and tokio is working great by default
+                // Last test yielded almost 10x faster performance on tokio > rayon
+                task::spawn_blocking(move || {
+                    loop {
+                        r.process_tick(&mut simulation);
+
+                        // Simulation Complete
+                        if simulation.tick() > simulate_tick_count {
+                            break;
+                        }
+
+                        let next_tick_start_secs = simulation.next_tick_start_secs();
+                        thread::sleep(Duration::from_secs_f32(next_tick_start_secs));
                     }
-                }
-            });
-
-            if tick == simulate_tick_count {
-                break;
-            }
-    
-            // Increment tick counter and reset once hitting max
-            if tick == u64::MAX {
-                tick = 1;
-            } else if simulate_tick_count > tick {
-                tick += 1;
-            } else if simulate_tick_count == tick {
-                break;
-            }
-
-            tokio::time::sleep_until(tokio::time::Instant::now() + tick_rate_duration).await
-        }
+                });
+            })
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::protos::components::Position;
+    use crate::protos::components::Velocity;
+use crate::protos::components::MoveIntent;
 
     use super::*;
     use tokio_test::assert_ok;
+    use rayon::prelude::*;
 
     #[test]
     fn new_world_test() {
         let id = "1";
-        let world = WorldInstance::new(String::from(id), 5, 5, 60);
+        let world = WorldInstance::new(String::from(id), 1, 1, 100, 100, 60);
 
         assert_eq!(world.id, id);
         assert_eq!(world.regions.len(), 5);
         assert_eq!(world.regions[0].len(), 5);
-
-        let region = &world.regions[1][3];
-
-        assert_eq!(region.x, 1);
-        assert_eq!(region.y, 3);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 100)]
-    async fn create_entity() {
-        let connection_id = "100";
-        let world = WorldInstance::new(String::from("1"), 5, 5, 60);
-        world.run_simulation(1); // Run only 1 ticks... otherwise the program runs forever
-        let context = world.create_context(0, 0, observer).await;
-        let result = context.submit_intent(Position::default()).await;
-        println!(
-            "created world context connection_id: {}, entity_id: {:?}",
-            context.object_id, context.entity_id
-        );
+    async fn process_tick() {
+        let mut world = WorldInstance::new(String::from("1"), 1, 1, 100, 100, 60);
 
-        assert_eq!(connection_id, context.connection_id);
+        world.run_simulation(1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 100)]
+    async fn create_context_and_intent() {
+        let mut world = WorldInstance::new(String::from("1"), 1, 1, 100, 100, 60);
+        let object_id = String::from("1000");
+        world.run_simulation(5); // Simulate 10 ticks so it may consume the context
+        let context = world.create_context(0, 0, object_id.clone()).await;
+        let result = context.submit_intent(MoveIntent::new()).await;
+        assert_eq!(context.object_id, object_id);
         assert_ok!(result);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 100)]
+    async fn process_tick_5x5_world() {
+        let mut world = WorldInstance::new(String::from("1"), 5, 5, 100, 100, 60);
+
+        world.run_simulation(1);
+    }
+
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 500)]
+    async fn process_tick_50x50_world() {
+        let mut world = WorldInstance::new(String::from("1"), 50, 50, 100, 100, 60);
+
+        world.run_simulation(1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 100)]
+    async fn process_tick_25_times() {
+        let mut world = WorldInstance::new(String::from("1"), 1, 1, 100, 100, 60);
+        world.run_simulation(25);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 100)]
+    async fn process_tick_25_times_with_1000_entities() {
+        let mut world = WorldInstance::new(String::from("1"), 1, 1, 100, 100, 60);
+        let tick_rate_secs = world.tick_rate_secs();
+
+        world.run_simulation_with_builder(25, &|| {
+            let mut simulation = Simulation::new(tick_rate_secs);
+            let world = simulation.world_mut();
+            for i in 0..1000 {
+                world.push((i.to_string(), MoveIntent::new(), Velocity::new()));
+            }
+            simulation
+        });
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 100)]
+    async fn process_tick_25_times_with_10000_entities() {
+        let mut world = WorldInstance::new(String::from("1"), 1, 1, 100, 100, 60);
+        let tick_rate_secs = world.tick_rate_secs();
+        
+        world.run_simulation_with_builder(25, &|| {
+            let mut simulation = Simulation::new(tick_rate_secs);
+            let world = simulation.world_mut();
+            for i in 0..10000 {
+                world.push((i.to_string(), MoveIntent::new(), Velocity::new()));
+            }
+            simulation
+        });
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 100)]
+    async fn process_tick_25_times_with_100000_entities() {
+        let mut world = WorldInstance::new(String::from("1"), 1, 1, 100, 100, 60);
+        let tick_rate_secs = world.tick_rate_secs();
+        
+        world.run_simulation_with_builder(25, &|| {
+            let mut simulation = Simulation::new(tick_rate_secs);
+            let world = simulation.world_mut();
+            for i in 0..100000 {
+                world.push((i.to_string(), MoveIntent::new(), Velocity::new()));
+            }
+            simulation
+        });
     }
 }

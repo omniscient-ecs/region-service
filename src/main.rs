@@ -1,5 +1,6 @@
 #![feature(test)]
 #![feature(unsized_locals)]
+#![feature(slice_iter_mut_as_slice)]
 
 mod ecs;
 mod protos;
